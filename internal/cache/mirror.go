@@ -56,6 +56,8 @@ func newMirrors(root string, upstream *url.URL, caFile string, refreshMin time.D
 		// Arbitrary-UID containers (OpenShift) have no passwd entry, so git cannot
 		// look up an identity or a home directory on its own.
 		"HOME=/tmp",
+		// Abort a fetch from an upstream that stops responding, rather than hang for minutes.
+		"GIT_HTTP_LOW_SPEED_LIMIT=1000", "GIT_HTTP_LOW_SPEED_TIME=60",
 		"GIT_AUTHOR_NAME=git-pull-thru-cache", "GIT_AUTHOR_EMAIL=noreply@localhost",
 		"GIT_COMMITTER_NAME=git-pull-thru-cache", "GIT_COMMITTER_EMAIL=noreply@localhost",
 	)

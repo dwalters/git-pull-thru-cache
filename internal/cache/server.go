@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -51,7 +52,8 @@ type Server struct {
 	m      *mirrors
 	auth   *authCache
 
-	shard      *sharder // nil when not sharded
+	downUntil  atomic.Int64 // unix nanos: skip upstream checks until then (circuit breaker)
+	shard      *sharder     // nil when not sharded
 	metrics    *metrics
 	upstreamUp atomic.Bool
 	fsUsage    func(path string) (used, total int64, err error) // swappable in tests
@@ -62,6 +64,11 @@ func New(cfg Config) (*Server, error) {
 		cfg.Logger = slog.Default()
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// Fail fast when the upstream is down: a blackholed connect would otherwise
+	// hold every request for the client timeout.
+	tr.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	tr.TLSHandshakeTimeout = 5 * time.Second
+	tr.ResponseHeaderTimeout = 15 * time.Second
 	if cfg.CAFile != "" {
 		pem, err := os.ReadFile(cfg.CAFile)
 		if err != nil {
@@ -130,7 +137,10 @@ var (
 	protoRE = regexp.MustCompile(`^[A-Za-z0-9=:,._-]*$`)
 )
 
-const maxBody = 256 << 20
+const (
+	maxBody     = 256 << 20
+	downBackoff = 10 * time.Second // how long a failed upstream check is trusted
+)
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" {
@@ -304,6 +314,21 @@ func (s *Server) authorize(ctx context.Context, ref repoRef, authHdr string) aut
 		return authResult{ok: true, upstreamUp: true}
 	}
 
+	// outage answers from the authorisation cache alone.
+	outage := func() authResult {
+		s.setUpstreamUp(false)
+		if t, ok := s.auth.get(key); ok && time.Since(t) < s.cfg.OutageAuthTTL {
+			s.metrics.authChecks.WithLabelValues("outage_allowed").Inc()
+			return authResult{ok: true, upstreamUp: false}
+		}
+		s.metrics.authChecks.WithLabelValues("outage_denied").Inc()
+		return authResult{}
+	}
+	// After a failure, don't make every request wait on a dead upstream.
+	if time.Now().UnixNano() < s.downUntil.Load() {
+		return outage()
+	}
+
 	u := s.cfg.Upstream.JoinPath(ref.urlPath(), "info", "refs")
 	u.RawQuery = "service=git-upload-pack"
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -321,14 +346,10 @@ func (s *Server) authorize(ctx context.Context, ref repoRef, authHdr string) aut
 		if err != nil {
 			s.log.Warn("upstream unreachable", "repo", ref.key(), "err", err)
 		}
-		s.setUpstreamUp(false)
-		if t, ok := s.auth.get(key); ok && time.Since(t) < s.cfg.OutageAuthTTL {
-			s.metrics.authChecks.WithLabelValues("outage_allowed").Inc()
-			return authResult{ok: true, upstreamUp: false}
-		}
-		s.metrics.authChecks.WithLabelValues("outage_denied").Inc()
-		return authResult{}
+		s.downUntil.Store(time.Now().Add(downBackoff).UnixNano())
+		return outage()
 	}
+	s.downUntil.Store(0)
 	s.setUpstreamUp(true)
 	if resp.StatusCode == http.StatusOK {
 		s.metrics.authChecks.WithLabelValues("allowed").Inc()

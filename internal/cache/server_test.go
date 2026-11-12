@@ -289,3 +289,23 @@ func TestShardedForwarding(t *testing.T) {
 		t.Fatal("non-owner created a mirror")
 	}
 }
+
+func TestCircuitBreakerSkipsUpstream(t *testing.T) {
+	hits := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer up.Close()
+	u, _ := url.Parse(up.URL)
+	srv, err := New(Config{Upstream: u, DataDir: t.TempDir(), AuthTTL: time.Minute, OutageAuthTTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := repoRef{"acme", "widgets"}
+	srv.downUntil.Store(time.Now().Add(time.Minute).UnixNano())
+	if a := srv.authorize(t.Context(), ref, "Basic x"); a.ok || a.status != 0 || hits != 0 {
+		t.Fatalf("breaker open: got %+v, upstream hits %d", a, hits)
+	}
+	srv.downUntil.Store(0)
+	if a := srv.authorize(t.Context(), ref, "Basic x"); !a.ok || hits != 1 {
+		t.Fatalf("breaker closed: got %+v, upstream hits %d", a, hits)
+	}
+}
