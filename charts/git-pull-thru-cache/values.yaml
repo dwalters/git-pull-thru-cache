@@ -1,0 +1,90 @@
+image:
+  repository: git-pull-thru-cache
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Base URL of the upstream git server, e.g. https://ghe.example.com (required).
+upstream: ""
+
+# Replicas > 1 shards repositories across pods: each repo is owned by one pod
+# (rendezvous hash of org/repo) and requests landing on any other pod are
+# proxied to the owner over the headless Service. One copy per repo, so while
+# a pod is down its repos are unavailable. Changing replicaCount remaps ~1/N of
+# repos (re-fetched on first use; old copies age out via eviction). Don't scale
+# during an upstream outage.
+replicaCount: 1
+
+# Optional OpenShift Route to the Service (any pod can take the request).
+route:
+  enabled: false
+  host: ""
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  annotations:
+    haproxy.router.openshift.io/timeout: 30m   # large clones take a while
+
+# PEM CA bundle for the upstream, from an existing Secret or ConfigMap key.
+upstreamCA:
+  existingSecret: ""
+  existingConfigMap: ""
+  key: ca.crt
+
+persistence:
+  size: 100Gi
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+
+# Eviction of least-recently-used repositories. Fractions of the PVC.
+eviction:
+  high: 0.85
+  low: 0.70
+  interval: 2m
+  maxSizeBytes: 0    # optional hard cap on mirror bytes; 0 = off
+
+auth:
+  ttl: 60s           # trust a successful upstream auth check for this long
+  outageTTL: 24h     # honour credentials that passed within this window while upstream is down
+
+refreshInterval: 1s
+extraArgs: []
+
+service:
+  type: ClusterIP
+  port: 80
+
+metrics:
+  port: 9090
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+# Upload-pack of a large repo can run for minutes; keep proxy timeouts generous.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []          # [{host: git-cache.example.com, paths: [/]}]
+  tls: []
+
+resources:
+  requests: {cpu: 250m, memory: 512Mi}
+  limits: {memory: 4Gi}   # git pack-objects can be memory hungry; size to your largest repos
+
+# No fixed uid/fsGroup: OpenShift's restricted-v2 SCC assigns them from the
+# namespace range (a pinned one is rejected). On vanilla Kubernetes set
+# podSecurityContext.fsGroup (and runAsUser) so the PVC is writable.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile: {type: RuntimeDefault}
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

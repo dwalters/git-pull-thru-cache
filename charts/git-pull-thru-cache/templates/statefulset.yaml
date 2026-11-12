@@ -1,0 +1,98 @@
+{{- if not .Values.upstream }}{{ fail "values.upstream is required" }}{{ end }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "gptc.fullname" . }}
+  labels: {{- include "gptc.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: {{ include "gptc.fullname" . }}-headless
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {{- include "gptc.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gptc.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: cache
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -listen=:8080
+            - -metrics-listen=:{{ .Values.metrics.port }}
+            - -upstream={{ .Values.upstream }}
+            - -auth-ttl={{ .Values.auth.ttl }}
+            - -outage-auth-ttl={{ .Values.auth.outageTTL }}
+            - -refresh-interval={{ .Values.refreshInterval }}
+            - -evict-high={{ .Values.eviction.high }}
+            - -evict-low={{ .Values.eviction.low }}
+            - -janitor-interval={{ .Values.eviction.interval }}
+            {{- if gt (int .Values.replicaCount) 1 }}
+            - -shard-count={{ .Values.replicaCount }}
+            - "-shard-peer-template=http://{{ include "gptc.fullname" . }}-%d.{{ include "gptc.fullname" . }}-headless.{{ .Release.Namespace }}.svc:8080"
+            {{- end }}
+            {{- if .Values.eviction.maxSizeBytes }}
+            - -max-size-bytes={{ int64 .Values.eviction.maxSizeBytes }}
+            {{- end }}
+            {{- if or .Values.upstreamCA.existingSecret .Values.upstreamCA.existingConfigMap }}
+            - -ca-file=/etc/gptc/ca/{{ .Values.upstreamCA.key }}
+            {{- end }}
+            {{- range .Values.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: {{ .Values.metrics.port }}}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            failureThreshold: 6
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+            {{- if or .Values.upstreamCA.existingSecret .Values.upstreamCA.existingConfigMap }}
+            - {name: ca, mountPath: /etc/gptc/ca, readOnly: true}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.upstreamCA.existingSecret }}
+        - name: ca
+          secret: {secretName: {{ .Values.upstreamCA.existingSecret }}}
+        {{- else if .Values.upstreamCA.existingConfigMap }}
+        - name: ca
+          configMap: {name: {{ .Values.upstreamCA.existingConfigMap }}}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: {{ toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
