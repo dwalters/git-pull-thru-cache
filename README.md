@@ -66,3 +66,7 @@ served locally by the receiver, so mismatched replica counts mid-rollout can't l
 - First request for an uncached repo blocks on a full mirror fetch.
 - Mirror holds all upstream refs, including `refs/pull/*`.
 - Sharded mode keeps one copy per repo, so a down pod makes its repos unavailable.
+
+## License
+
+MIT
