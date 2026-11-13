@@ -1,5 +1,5 @@
 image:
-  repository: git-pull-thru-cache
+  repository: ghcr.io/dwalters/git-pull-thru-cache
   tag: ""            # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 imagePullSecrets: []

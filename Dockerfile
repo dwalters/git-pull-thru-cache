@@ -1,8 +1,9 @@
-FROM golang:1.27 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27 AS build
+ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod ./
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/git-pull-thru-cache ./cmd/git-pull-thru-cache
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/git-pull-thru-cache ./cmd/git-pull-thru-cache
 
 FROM alpine:3.20
 RUN apk add --no-cache git ca-certificates

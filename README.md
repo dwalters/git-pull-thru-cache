@@ -40,7 +40,14 @@ on next use.
 
 ## Deploy
 
-    helm install gitcache charts/git-pull-thru-cache --set upstream=https://ghe.example.com
+Images (linux/amd64, arm64) and the chart are published by CI to ghcr.io on `v*` tags:
+
+    helm install gitcache oci://ghcr.io/dwalters/charts/git-pull-thru-cache --version 0.1.1 \
+      --set upstream=https://git.example.com
+
+or from a checkout: `helm install gitcache charts/git-pull-thru-cache --set upstream=...`.
+On OpenShift add `--set route.enabled=true --set route.host=...` for a Route; the chart sets no
+fixed UID or fsGroup, so the restricted SCC works as is.
 
 ## Sharding
 
